@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Rehabify – Calibration</title>
+
+  <!-- Keep styles here or move into /public/style.css later -->
+  <link rel="stylesheet" href="../style.css" />
+
+  <!-- These CDN scripts are required -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+
+  <style>
+    :root{ --bg:#0b1220; --card:#0f172a; --border:#1f2942; --text:#e5e7eb; --sub:#a2b4ff; --accent:#6366f1; --max:#ffd54a; }
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Segoe UI,Roboto,Arial}
+    header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px}
+    h3{margin:0;font-weight:800} .btn{background:#6d6ef7;border:0;border-radius:10px;color:#fff;font-weight:700;padding:10px 14px;cursor:pointer}
+    .btn.secondary{background:#263256} .btn[disabled]{opacity:.6;cursor:not-allowed}
+    .wrap{padding:12px; max-width:1200px; margin:0 auto;} .layout{display:grid; grid-template-columns: 2fr 1fr; gap:16px;}
+    @media (max-width: 980px){ .layout{grid-template-columns: 1fr;} }
+    #stage{ position:relative;border:1px solid var(--border); border-radius:14px;overflow:hidden;background:var(--card); aspect-ratio:16/9; min-height:420px; }
+    #canvas{ display:block;width:100%;height:100%; background:#0b1325; } #video{display:none}
+    #ladderLayer{position:absolute;inset:0;pointer-events:none}
+    .axis{position:absolute;width:4px;top:0;bottom:0;background:#cfe1f6;opacity:.45;transform:translateX(-50%)}
+    .dot{position:absolute;width:14px;height:14px;border-radius:50%; background:#cfe1f6;opacity:.85;transform:translate(-50%,-50%); box-shadow:0 0 0 2px rgba(255,255,255,.35) inset; transition:filter .15s, box-shadow .15s, transform .15s}
+    .dot.active-left{background:#ffd1df; transform:translate(-50%,-50%) scale(1.08)}
+    .dot.active-right{background:#bfe1ff; transform:translate(-50%,-50%) scale(1.08)}
+    .dot.saved{box-shadow:0 0 0 2px #fff inset, 0 0 12px rgba(255,255,255,.35)} .dot.maxreach{ background:var(--max); box-shadow:0 0 0 2px #fff inset, 0 0 18px rgba(255,213,74,.9) }
+    aside{display:flex;flex-direction:column;gap:12px} .panel{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px}
+    .title{font-weight:800;margin-bottom:6px;color:var(--sub)} .kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .kpis .card{background:#0e1a2e;border:1px solid var(--border);border-radius:10px;padding:10px} .label{color:#9aa7c1;font-size:12px;margin-bottom:4px} .value{font-weight:800}
+    .calib-bar{height:8px;background:#1f2937;border-radius:9999px;overflow:hidden} .calib-fill{height:100%;background:var(--accent);width:0%}
+    .chip{display:inline-flex;align-items:center;gap:8px;background:#111827;border:1px solid #263256;border-radius:9999px;padding:6px 10px;font-weight:700}
+    .chip .dot{position:static;width:10px;height:10px;box-shadow:none;transform:none}
+    .saveToast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#0f172a;border:1px solid #263256; color:#e5e7eb;padding:10px 14px;border-radius:12px;display:none}
+    .saveToast.show{display:block}
+  </style>
+</head>
+<body>
+  <header>
+    <h3>Rehabify – Shoulder Abduction (Calibration)</h3>
+    <div>
+      <button id="btnStart" class="btn">Start Camera</button>
+      <button id="btnReset" class="btn secondary" disabled>Reset</button>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="layout">
+      <div id="stage">
+        <canvas id="canvas"></canvas>
+        <video id="video" autoplay muted playsinline></video>
+        <div id="ladderLayer"></div>
+      </div>
+
+      <aside>
+        <div class="panel">
+          <div class="title" id="status">Idle.</div>
+          <div class="kpis">
+            <div class="card"><div class="label">Left Rung</div><div id="kpiLeft" class="value">–</div></div>
+            <div class="card"><div class="label">Right Rung</div><div id="kpiRight" class="value">–</div></div>
+            <div class="card"><div class="label">Saved</div><div id="kpiSaved" class="value">–</div></div>
+            <div class="card"><div class="label">Hold</div><div id="kpiHold" class="value">0.0s</div></div>
+            <div class="card"><div class="label">Lane X (L/R)</div><div id="kpiTargets" class="value">–</div></div>
+            <div class="card"><div class="label">Status</div><div id="kpiStatus" class="value">–</div></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="label">Step</div>
+          <div class="chip"><span id="armDot" class="dot" style="background:#ffd1df"></span><span id="armLabel">LEFT</span></div>
+        </div>
+
+        <div class="panel">
+          <div class="label">Timer</div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div id="sideTimer" class="value" style="min-width:64px">5.0s</div>
+            <div class="calib-bar" style="flex:1"><div id="sideFill" class="calib-fill"></div></div>
+          </div>
+          <div id="hipTip" class="label" style="margin-top:8px">Make sure your waist (hips) is visible to the camera.</div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div id="saveToast" class="saveToast">✅ Calibration saved.</div>
+
+  <!-- Move all logic into this file -->
+  <script src="calibration.js"></script>
+</body>
+</html>

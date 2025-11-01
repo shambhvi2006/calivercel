@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Rehabify – Shoulder Abduction</title>
+
+  <style>
+    :root { --bg:#0d1721; --panel:#0f2130; --text:#e7eef7; --muted:#9ab1c6; --accent:#6e75ff; }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+    .shell{max-width:1120px;margin:0 auto;padding:16px 20px 28px;}
+    header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+    h1{margin:0;font-weight:700;font-size:22px}
+    .hint{color:var(--muted);font-size:13px}
+
+    .grid{display:grid;grid-template-columns:3fr 1fr;gap:16px;align-items:start}
+    @media (max-width: 980px){ .grid{grid-template-columns:1fr} }
+
+    .stage{position:relative;background:var(--panel);border-radius:12px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.25);}
+    .video-wrap{position:relative;width:100%;aspect-ratio:16/9;background:#000;}
+    video{
+      position:absolute; inset:0; width:100%; height:100%;
+      object-fit: cover;             /* fill the box */
+      object-position:center center;
+      transform:scaleX(-1);
+      backface-visibility:hidden;
+    }
+    #overlay{position:absolute;inset:0;pointer-events:none;}
+    #star-layer{position:absolute;inset:0;pointer-events:none}
+    .star{position:absolute;transform:translate(-50%,-50%);width:42px;height:42px; /* smaller */ filter:drop-shadow(0 6px 12px rgba(0,0,0,.35))}
+    .star svg{width:100%;height:100%}
+
+    .controls{display:flex;gap:10px;margin:12px 0 6px}
+    button{background:#4b56ff;border:none;color:#fff;border-radius:10px;padding:10px 16px;font-weight:700;cursor:pointer}
+    button.secondary{background:#223044}
+
+    .hud .card{background:var(--panel);border-radius:12px;padding:12px;margin-bottom:12px}
+    .label{font-size:12px;color:var(--muted);margin-bottom:6px}
+    .value{font-weight:800;font-size:20px}
+    .status{min-height:38px}
+    .topline{color:var(--muted);font-size:13px;margin:8px 0 10px}
+
+    .star.burst { animation: burst 900ms ease-out forwards; }
+    @keyframes burst { 0%{transform:translate(-50%,-50%) scale(1);opacity:1}
+      55%{transform:translate(-50%,-50%) scale(2.6);opacity:1}
+      100%{transform:translate(-50%,-50%) scale(3.0);opacity:0} }
+    .particle{ position:absolute;width:10px;height:10px;border-radius:50%;
+      background:radial-gradient(circle,#fff,rgba(255,255,255,.12));pointer-events:none;
+      filter:drop-shadow(0 6px 10px rgba(0,0,0,.35));animation:fly 900ms ease-out forwards; }
+    @keyframes fly{
+      0%{transform:translate(-50%,-50%) scale(1);opacity:1}
+      100%{transform:translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(.4);opacity:0}
+    }
+
+    /* Overlay for level breaks */
+    .overlay{
+      position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:30;
+      background:rgba(0,0,0,.45);
+    }
+    .overlay.show{ display:flex; }
+    .overlay .card{
+      background: rgba(15,33,48,.86);
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:16px;
+      padding:22px 28px;
+      text-align:center; color:#fff;
+      backdrop-filter: blur(8px);
+      transform: scale(.92);
+      box-shadow: 0 10px 40px rgba(0,0,0,.45);
+      max-width: 420px;
+    }
+    .overlay .big{ font-size:26px; font-weight:800; letter-spacing:.2px; margin-bottom:6px;}
+    .overlay .sub{ font-size:14px; color:#cfe1f6;}
+    .count{font-size:42px;font-weight:900;margin-top:8px}
+    /* Optional live feedback look */
+    .live-feedback-container{
+      background:rgba(15,33,48,.7);
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:10px;
+      padding:8px 12px;
+    }
+  </style>
+
+  <!-- MediaPipe (camera helper + pose) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+
+  <!-- Optional live feedback (safe if missing) -->
+  <script src="/js/live-feedback.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <h1>Rehabify – Shoulder Abduction</h1>
+        <div class="hint">3 reps per level • 3 levels • 5s break between levels</div>
+      </div>
+      <div class="hint" id="levelTag">• Level 1</div>
+    </header>
+
+    <div class="topline" id="topline">
+      Pop both stars (any order) → that’s 1 rep. After 3 reps, you’ll get a 5s break and stars rise a bit.
+    </div>
+
+    <div class="grid">
+      <div>
+        <div class="stage" id="stage">
+          <div class="video-wrap">
+            <video id="video" playsinline muted></video>
+            <canvas id="overlay"></canvas>
+            <div id="star-layer"></div>
+          </div>
+        </div>
+        <div class="controls">
+          <button id="startBtn">▶ Start</button>
+          <button id="resetBtn" class="secondary">Reset</button>
+        </div>
+      </div>
+
+      <aside class="hud">
+        <div class="card"><div class="label">Reps (this level)</div><div class="value" id="repValue">0 / 3</div></div>
+        <div class="card"><div class="label">Level</div><div class="value" id="levelValue">1 / 3</div></div>
+        <div class="card status"><div class="label">Status</div><div id="statusText">Press Start to begin</div></div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Level break overlay -->
+  <div id="levelOverlay" class="overlay">
+    <div class="card">
+      <div class="big" id="overlayTitle">Level Up!</div>
+      <div class="sub" id="overlaySub">Next level starts in</div>
+      <div class="count" id="overlayCount">5</div>
+    </div>
+  </div>
+
+  <script type="module">
+    /* ================== configurable bits ================== */
+    const COMPLETE_REDIRECT = ".";      // change if needed
+    const LEVELS = 3;                                // total sets
+    const REPS_PER_LEVEL = 3;                        // your request
+    const BREAK_SECONDS = 5;                         // between levels
+    const HEIGHT_STEP = 0.04;                        // small raise each level (normalized y decrease)
+    const STAR_RADIUS_PCT = 0.07;                    // sensitivity (keep a bit less sensitive)
+    const POP_K_FRAMES   = 5;                        // stability to pop
+    const DOWN_K_FRAMES  = 8;                        // stability to accept "hand down"
+    const DOWN_DELTA     = 0.02;                     // how much below neutral to count as "down"
+
+    /* ================== calibration load ================== */
+    const KEY = 'calib_vertical_autohold';
+    const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+
+    let calib=null;
+    try { calib = JSON.parse(sessionStorage.getItem(KEY) || localStorage.getItem(KEY) || 'null'); } catch { calib=null; }
+
+    const LADDER = {
+      count:   calib?.count   ?? 8,
+      yTop:    calib?.yTop    ?? 0.18,
+      yBottom: calib?.yBottom ?? 0.85
+    };
+    const xLeft  = Number.isFinite(calib?.leftX)  ? calib.leftX  : 0.18;
+    const xRight = Number.isFinite(calib?.rightX) ? calib.rightX : 0.82;
+
+    const baseLeftY  = Number.isFinite(calib?.leftY)
+      ? calib.leftY
+      : ladderY(calib?.leftIndex ?? 3);
+    const baseRightY = Number.isFinite(calib?.rightY)
+      ? calib.rightY
+      : ladderY(calib?.rightIndex ?? 3);
+
+    const neutralY = Number.isFinite(calib?.rom?.neutralY) ? calib.rom.neutralY : LADDER.yBottom;
+
+    function ladderY(idx){
+      const t = (Math.max(1, Math.min(LADDER.count, idx)) - 1) / (LADDER.count - 1);
+      return LADDER.yBottom - (LADDER.yBottom - LADDER.yTop) * t;
+    }
+
+    function levelAdjustedY(baseY, level){
+      // y=0 is top. To make it “a little higher” each level, subtract a small step.
+      const step = HEIGHT_STEP * (level-1);
+      return clamp(baseY - step, LADDER.yTop, LADDER.yBottom);
+    }
+
+    /* ================== DOM ================== */
+    const $ = id => document.getElementById(id);
+    const video=$("video"), overlay=$("overlay"), starLayer=$("star-layer");
+    const startBtn=$("startBtn"), resetBtn=$("resetBtn");
+    const statusText=$("statusText"), repValue=$("repValue"), levelValue=$("levelValue"), levelTag=$("levelTag");
+    const levelOverlay=$("levelOverlay"), overlayTitle=$("overlayTitle"), overlaySub=$("overlaySub"), overlayCount=$("overlayCount");
+    const ctx = overlay.getContext('2d');
+
+    // Feedback box (safe if live-feedback.js missing)
+    const fbBox = document.createElement('div');
+    fbBox.id = "liveFeedback";
+    fbBox.className = "live-feedback-container";
+    fbBox.style.position="absolute"; fbBox.style.left="12px"; fbBox.style.bottom="12px"; fbBox.style.right="12px";
+    fbBox.style.fontSize="14px"; fbBox.style.color="#bfe1ff";
+    document.querySelector('.video-wrap').appendChild(fbBox);
+    if (window.liveFeedback && typeof window.liveFeedback.init === 'function') {
+      window.liveFeedback.init("liveFeedback");
+    }
+
+    const setStatus = s => { statusText.textContent = s ?? ''; };
+    const setReps   = (v, total=REPS_PER_LEVEL) => repValue.textContent = `${v} / ${total}`;
+    const setLevel  = (lv,total=LEVELS) => { levelValue.textContent = `${lv} / ${total}`; levelTag.textContent = `• Level ${lv}`; };
+
+    /* ================== state ================== */
+    const state = {
+      running:false,
+      level:1, reps:0,
+      latestLm:null,
+      handL:null, handR:null,
+      leftStar:null, rightStar:null,
+      leftPhase:"up",  rightPhase:"up",   // "up" -> can pop; "waitDown" -> must lower
+      leftUpFrames:0,  rightUpFrames:0,
+      leftDownFrames:0,rightDownFrames:0,
+      poppedLeft:false,poppedRight:false, // track pair for rep
+      isBreaking:false
+    };
+
+    const starSVG = (fill='#ffd4f1') => `
+      <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <defs><filter id="g"><feGaussianBlur in="SourceAlpha" stdDeviation="2"/><feOffset dx="0" dy="2"/>
+          <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+        <path filter="url(#g)" d="M50 5 61 35 94 38 68 58 76 90 50 73 24 90 32 58 6 38 39 35z"
+              fill="${fill}" stroke="#fff" stroke-width="4" />
+      </svg>`;
+
+    /* ================== sizing & coords ================== */
+    function fitCanvas(){ const r=starLayer.getBoundingClientRect(); overlay.width=Math.max(1,Math.round(r.width)); overlay.height=Math.max(1,Math.round(r.height)); }
+    window.addEventListener('resize', fitCanvas);
+    function handToPx(nrmX,nrmY){ const r=starLayer.getBoundingClientRect(); return { x:(1-nrmX)*r.width, y:nrmY*r.height }; }
+    function starToPx(xD,yN){ const r=starLayer.getBoundingClientRect(); return { x:xD*r.width, y:yN*r.height }; }
+    function smooth(prev,next,a=0.35){ if(!next) return prev; if(!prev) return next; return { x:prev.x+a*(next.x-prev.x), y:prev.y+a*(next.y-prev.y) }; }
+    function distPx(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+
+    /* ================== stars ================== */
+    function clearStars(){ while(starLayer.firstChild) starLayer.firstChild.remove(); state.leftStar=state.rightStar=null; }
+    function positionStars(){
+      if(!state.leftStar||!state.rightStar) return;
+      const pL = starToPx(state.leftStar.xD,  state.leftStar.yN);
+      const pR = starToPx(state.rightStar.xD, state.rightStar.yN);
+      state.leftStar.el.style.left=`${pL.x}px`;  state.leftStar.el.style.top=`${pL.y}px`;
+      state.rightStar.el.style.left=`${pR.x}px`; state.rightStar.el.style.top=`${pR.y}px`;
+    }
+    function placeStarsForLevel(){
+      clearStars();
+      const yL = levelAdjustedY(baseLeftY,  state.level);
+      const yR = levelAdjustedY(baseRightY, state.level);
+
+      const sL=document.createElement('div'); sL.className='star'; sL.innerHTML=starSVG('#ffb1d8'); starLayer.appendChild(sL);
+      const sR=document.createElement('div'); sR.className='star'; sR.innerHTML=starSVG('#bfe1ff'); starLayer.appendChild(sR);
+      state.leftStar  = { el:sL,  xD:xLeft,  yN:yL, hit:false, burstPromise:null };
+      state.rightStar = { el:sR,  xD:xRight, yN:yR, hit:false, burstPromise:null };
+      positionStars();
+    }
+
+    function burstStar(el,color='#ffd54a'){
+      return new Promise(resolve=>{
+        if (!el) return resolve();
+        el.classList.add('burst');
+        const parent=starLayer, pr=parent.getBoundingClientRect(), er=el.getBoundingClientRect();
+        const cx=er.left-pr.left+er.width/2, cy=er.top-pr.top+er.height/2;
+        const N=18; for(let i=0;i<N;i++){
+          const p=document.createElement('span');
+          p.className='particle';
+          const ang=(Math.PI*2)*(i/N)+(Math.random()*0.6-0.3);
+          const dist=120+Math.random()*120;
+          p.style.left=`${cx}px`; p.style.top=`${cy}px`;
+          p.style.setProperty('--dx',`${Math.cos(ang)*dist}px`);
+          p.style.setProperty('--dy',`${Math.sin(ang)*dist}px`);
+          p.style.background = i%2 ? color : '#fff';
+          parent.appendChild(p);
+          setTimeout(()=>p.remove(), 920);
+        }
+        setTimeout(()=>{ el.classList.remove('burst'); resolve(); }, 920);
+      });
+    }
+
+    /* ================== camera / pose ================== */
+    async function start(){
+      if(state.running) return;
+      state.running=true; state.isBreaking=false;
+      setLevel(state.level); setReps(state.reps);
+      setStatus('Starting camera…');
+
+      if (!navigator.mediaDevices?.getUserMedia){ setStatus('getUserMedia not supported'); state.running=false; return; }
+      const tries=[ {video:{facingMode:{ideal:'user'},width:{ideal:1280},height:{ideal:720}},audio:false},
+                    {video:{facingMode:'user'},audio:false},{video:true,audio:false} ];
+      let stream=null,lastErr=null; for(const c of tries){ try{ stream=await navigator.mediaDevices.getUserMedia(c); break; }catch(e){ lastErr=e; } }
+      if(!stream){ setStatus(`Camera error: ${lastErr?.message||lastErr}`); state.running=false; return; }
+
+      video.srcObject=stream; video.setAttribute('playsinline',''); video.muted=true;
+      await new Promise(res=>{ if(video.readyState>=1) return res(); video.addEventListener('loadedmetadata',res,{once:true}); });
+      await video.play().catch(()=>{});
+
+      fitCanvas(); placeStarsForLevel();
+
+      // Pose constructor variants (defensive)
+      const PoseCtor =
+        (window.Pose && window.Pose.Pose) ? window.Pose.Pose :
+        (window.Pose) ? window.Pose :
+        (window.pose && window.pose.Pose) ? window.pose.Pose : null;
+
+      if(!PoseCtor){ setStatus('Pose constructor not found (CDN failed?)'); state.running=false; return; }
+      const pose=new PoseCtor({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+      pose.setOptions({ modelComplexity:1, smoothLandmarks:true, minDetectionConfidence:0.6, minTrackingConfidence:0.6 });
+      pose.onResults(({poseLandmarks}) => { state.latestLm = poseLandmarks || null; });
+
+      if (typeof Camera==='function'){
+        const cam=new Camera(video,{ onFrame: async()=>{ await pose.send({ image: video }); }, width: overlay.width, height: overlay.height });
+        cam.start();
+      } else {
+        (async function loop(){ await pose.send({ image: video }); requestAnimationFrame(loop); })();
+      }
+
+      setStatus('Level 1: Pop both stars; lower hands to reset; 3 reps total.');
+      requestAnimationFrame(mainLoop);
+    }
+
+    function resetAll(){
+      state.reps=0; setReps(state.reps);
+      state.leftPhase="up"; state.rightPhase="up";
+      state.leftUpFrames=state.rightUpFrames=state.leftDownFrames=state.rightDownFrames=0;
+      state.poppedLeft=false; state.poppedRight=false;
+      placeStarsForLevel();
+      setStatus(`Level ${state.level} reset. Do ${REPS_PER_LEVEL} reps.`);
+    }
+
+    /* ================== level progress ================== */
+    function completeLevelOrFinish(){
+      if (state.level >= LEVELS){
+        setStatus('Great job! Session complete 🎉');
+        setTimeout(()=> { window.location.href = COMPLETE_REDIRECT; }, 900);
+        return;
+      }
+      // start break
+      state.isBreaking = true;
+      levelOverlay.classList.add('show');
+      overlayTitle.textContent = `Level ${state.level} complete!`;
+      overlaySub.textContent = 'Next level starts in';
+      let t = BREAK_SECONDS;
+      overlayCount.textContent = String(t);
+      const iv = setInterval(()=>{
+        t -= 1; overlayCount.textContent = String(t);
+        if (t <= 0){
+          clearInterval(iv);
+          levelOverlay.classList.remove('show');
+          // advance level
+          state.level += 1;
+          setLevel(state.level);
+          // reset per-level state
+          state.reps = 0; setReps(state.reps);
+          state.leftPhase="up"; state.rightPhase="up";
+          state.leftUpFrames=state.rightUpFrames=state.leftDownFrames=state.rightDownFrames=0;
+          state.poppedLeft=false; state.poppedRight=false;
+          placeStarsForLevel();
+          setStatus(`Level ${state.level}: Pop both stars; lower hands to reset; ${REPS_PER_LEVEL} reps.`);
+          state.isBreaking = false;
+        }
+      }, 1000);
+    }
+
+    /* ================== main loop ================== */
+    function mainLoop(){
+      if (!state.running) return;
+      if (!state.isBreaking) positionStars();
+
+      const lm = state.latestLm;
+      if (!state.isBreaking && lm && state.leftStar && state.rightStar){
+        const pL = lm[15] ? {x:lm[15].x, y:lm[15].y} : null;
+        const pR = lm[16] ? {x:lm[16].x, y:lm[16].y} : null;
+
+        let pxL = pL ? handToPx(pL.x, pL.y) : null;
+        let pxR = pR ? handToPx(pR.x, pR.y) : null;
+        state.handL = smooth(state.handL, pxL, 0.35);
+        state.handR = smooth(state.handR, pxR, 0.35);
+        pxL = state.handL || pxL; pxR = state.handR || pxR;
+
+        const rect = starLayer.getBoundingClientRect();
+        const radPx = Math.max(76, Math.min(rect.width, rect.height) * STAR_RADIUS_PCT);
+
+        const sPosL = starToPx(state.leftStar.xD,  state.leftStar.yN);
+        const sPosR = starToPx(state.rightStar.xD, state.rightStar.yN);
+
+        // LEFT hand logic
+        if (state.leftPhase === "up"){
+          if (!state.leftStar.hit && pxL){
+            const inRange = distPx(pxL, sPosL) <= radPx;
+            state.leftUpFrames = inRange ? state.leftUpFrames + 1 : 0;
+            if (inRange && state.leftUpFrames >= POP_K_FRAMES){
+              state.leftStar.hit = true;
+              state.leftStar.burstPromise = burstStar(state.leftStar.el, '#ffb1d8');
+              state.leftPhase = "waitDown";
+              state.poppedLeft = true;
+              setStatus("Left popped! Lower LEFT hand to reset.");
+            }
+          }
+        } else {
+          const downOK = (pL?.y ?? 1) >= (neutralY + DOWN_DELTA);
+          state.leftDownFrames = downOK ? state.leftDownFrames + 1 : 0;
+          if (state.leftDownFrames >= DOWN_K_FRAMES){
+            state.leftDownFrames = 0; state.leftUpFrames = 0;
+            state.leftPhase = "up";
+            // respawn left star at this level’s height
+            const el=document.createElement('div'); el.className='star'; el.innerHTML=starSVG('#ffb1d8'); starLayer.appendChild(el);
+            state.leftStar = { el, xD:xLeft, yN:levelAdjustedY(baseLeftY, state.level), hit:false, burstPromise:null };
+            positionStars();
+            setStatus("Left reset. You can go again or pop the other side.");
+          }
+        }
+
+        // RIGHT hand logic
+        if (state.rightPhase === "up"){
+          if (!state.rightStar.hit && pxR){
+            const inRange = distPx(pxR, sPosR) <= radPx;
+            state.rightUpFrames = inRange ? state.rightUpFrames + 1 : 0;
+            if (inRange && state.rightUpFrames >= POP_K_FRAMES){
+              state.rightStar.hit = true;
+              state.rightStar.burstPromise = burstStar(state.rightStar.el, '#bfe1ff');
+              state.rightPhase = "waitDown";
+              state.poppedRight = true;
+              setStatus("Right popped! Lower RIGHT hand to reset.");
+            }
+          }
+        } else {
+          const downOK = (pR?.y ?? 1) >= (neutralY + DOWN_DELTA);
+          state.rightDownFrames = downOK ? state.rightDownFrames + 1 : 0;
+          if (state.rightDownFrames >= DOWN_K_FRAMES){
+            state.rightDownFrames = 0; state.rightUpFrames = 0;
+            state.rightPhase = "up";
+            const el=document.createElement('div'); el.className='star'; el.innerHTML=starSVG('#bfe1ff'); starLayer.appendChild(el);
+            state.rightStar = { el, xD:xRight, yN:levelAdjustedY(baseRightY, state.level), hit:false, burstPromise:null };
+            positionStars();
+            setStatus("Right reset. You can go again or pop the other side.");
+          }
+        }
+
+        // Count a rep when both sides have popped at least once (in any order)
+        // and both have been lowered back to "up" (so user put hands down).
+        if (state.poppedLeft && state.poppedRight && state.leftPhase === "up" && state.rightPhase === "up"){
+          state.poppedLeft = false; state.poppedRight = false;
+          state.reps += 1; setReps(state.reps);
+          setStatus(`Nice! Rep ${state.reps} of ${REPS_PER_LEVEL} complete.`);
+          if (state.reps >= REPS_PER_LEVEL){
+            completeLevelOrFinish();  // triggers break or redirect
+          }
+        }
+
+        // Optional live feedback
+        if (window.liveFeedback && typeof window.liveFeedback.provideFeedback === 'function'){
+          window.liveFeedback.provideFeedback('shoulderAbduction', lm);
+        }
+      }
+
+      requestAnimationFrame(mainLoop);
+    }
+
+    /* ================== bind ================== */
+    function bind(){
+      startBtn.addEventListener('click', ()=> start().catch(e=> setStatus(`Start failed: ${e?.message||e}`)));
+      resetBtn.addEventListener('click', resetAll);
+    }
+    if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', bind, {once:true}); else bind();
+  </script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "builds": [
+    { "src": "*.html", "use": "@vercel/static" },
+    { "src": "*.js", "use": "@vercel/static" }
+  ],
+  "routes": [
+    { "src": "/", "dest": "/calibration.html" },
+    { "src": "/(.*)", "dest": "/$1" }
+  ]
+}
